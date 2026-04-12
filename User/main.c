@@ -13,7 +13,7 @@
 #include "timer.h"
 #include "UltrasonicWave.h"
 
-#define STARTUP_BALANCE_TICKS   400u
+#define STARTUP_BALANCE_TICKS   1000u
 // Startup running speed after the initial balance-hold window.
 #define STARTUP_RUN_SPEED_CMD   110.0f
 
@@ -64,19 +64,6 @@ int main(void)
 
 		MPU6050_Pose();						 
 
-
-
-
-
-
-
-
-
-
-
-
-		
-		
 		if(u8StartupDone == 0)
 		{
 			u8 u8MainEventNow = BST_u8MainEventCount;

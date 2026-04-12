@@ -54,6 +54,10 @@ static stFigureEightParam g_stFigureEightParam = {
 static float g_fStraightSpeedCmd = STRAIGHT_DEFAULT_SPEED_CMD;
 static float g_fFixedSpeedCmd = FIXED_SPEED_CMD;
 static float g_fFixedTurnCmd = FIXED_TURN_CMD;
+static float g_fObsRightAvoidSpeedCmd = ULTRA_OBS_RIGHT_AVOID_SPEED_CMD;
+static float g_fObsRightAvoidTurnCmd = ULTRA_OBS_RIGHT_AVOID_TURN_CMD;
+static u8 g_u8ObsConfirmCnt = 0;
+static u8 g_u8ObsStopConfirmCnt = 0;
 static u8 BST_u8StraightEventLast = 0;
 static float g_fWheelBalanceI = 0.0f;
 static float g_fWheelBalanceOut = 0.0f;
@@ -612,9 +616,25 @@ void AutoRun_SetStraight(float speedCmd)
 {
 	g_enAutoRunMode = enAutoRunStraight;
 	g_fStraightSpeedCmd = speedCmd;
+	g_u8ObsConfirmCnt = 0;
+	g_u8ObsStopConfirmCnt = 0;
 	BST_u8MainEventLast = BST_u8MainEventCount;
 	BST_u32EightTick = 0;
 	BST_u8StraightEventLast = BST_u8MainEventCount;
+}
+
+void AutoRun_SetObsRightAvoid(float avoidSpeedCmd, float avoidTurnCmd)
+{
+	if(avoidSpeedCmd < 0.0f)
+	{
+		avoidSpeedCmd = -avoidSpeedCmd;
+	}
+	if(avoidTurnCmd < 0.0f)
+	{
+		avoidTurnCmd = -avoidTurnCmd;
+	}
+	g_fObsRightAvoidSpeedCmd = avoidSpeedCmd;
+	g_fObsRightAvoidTurnCmd = avoidTurnCmd;
 }
 
 void AutoRun_SetFigureEight(float baseSpeedCmd, float turnAmplCmd, float omegaRad, float startPhaseRad, float speedModRatio)
@@ -654,18 +674,62 @@ void AutoRun_SetFixed(float speedCmd, float turnCmd)
 static void StraightAvoidControl(void)
 {
 	float fSpeedCmd;
+	float fDirectionCmd;
+	float fDirectionLimit;
+	float fObsSlowCm;
 	float fObsCm;
 
 	fSpeedCmd = g_fStraightSpeedCmd;
+	fDirectionCmd = 0.0f;
+	fObsSlowCm = ULTRA_OBS_SLOW_CM;
+	if(fObsSlowCm <= (ULTRA_OBS_STOP_CM + 1.0f))
+	{
+		fObsSlowCm = ULTRA_OBS_STOP_CM + 8.0f;
+	}
 	fObsCm = juli;
 
-	if(fObsCm > 0.01f && fObsCm <= ULTRA_OBS_STOP_CM)
+	if(fObsCm >= ULTRA_OBS_VALID_MIN_CM && fObsCm <= ULTRA_OBS_STOP_CM)
 	{
-		fSpeedCmd = 0.0f;
+		g_u8ObsConfirmCnt = 0;
+		if(g_u8ObsStopConfirmCnt < 255u)
+		{
+			g_u8ObsStopConfirmCnt++;
+		}
+
+		if(g_u8ObsStopConfirmCnt >= ULTRA_OBS_STOP_CONFIRM_CNT)
+		{
+			fSpeedCmd = 0.0f;
+			fDirectionCmd = 0.0f;
+		}
+	}
+	else if(fObsCm > ULTRA_OBS_STOP_CM && fObsCm <= fObsSlowCm)
+	{
+		g_u8ObsStopConfirmCnt = 0;
+		if(g_u8ObsConfirmCnt < 255u)
+		{
+			g_u8ObsConfirmCnt++;
+		}
+
+		if(g_u8ObsConfirmCnt >= ULTRA_OBS_CONFIRM_CNT)
+		{
+			fSpeedCmd = g_fObsRightAvoidSpeedCmd;
+			// Obstacle-avoid turn amplitude takes effect here.
+			fDirectionCmd = g_fObsRightAvoidTurnCmd;
+			fDirectionLimit = fabsf(fSpeedCmd) * ULTRA_OBS_RIGHT_TURN_SPEED_RATIO;
+			if(fDirectionCmd > fDirectionLimit)
+			{
+				fDirectionCmd = fDirectionLimit;
+			}
+		}
+	}
+	else
+	{
+		g_u8ObsConfirmCnt = 0;
+		g_u8ObsStopConfirmCnt = 0;
 	}
 
 	BST_fBluetoothSpeed = fSpeedCmd;
-	BST_fBluetoothDirectionNew = 0;
+	BST_fBluetoothDirectionNew = fDirectionCmd;
 	chaoflag = 0;
 	fchaoshengbo = 0;
 }
@@ -686,6 +750,7 @@ static void FigureEightControl(void)
 	fSpeedScale = 1.0f - g_stFigureEightParam.fSpeedModRatio + g_stFigureEightParam.fSpeedModRatio * (float)cos(2.0f * fPhase);
 
 	BST_fBluetoothSpeed = g_stFigureEightParam.fBaseSpeedCmd * fSpeedScale;
+	// Figure-eight turn amplitude takes effect here.
 	BST_fBluetoothDirectionNew = g_stFigureEightParam.fTurnAmplCmd * (float)sin(fPhase);
 	chaoflag = 1;
 	fchaoshengbo = 0;

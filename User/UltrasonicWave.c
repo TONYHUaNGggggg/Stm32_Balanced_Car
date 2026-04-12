@@ -12,6 +12,7 @@
 #define	ECHO_PORT      GPIOB		
 #define	TRIG_PIN       GPIO_Pin_0   
 #define	ECHO_PIN       GPIO_Pin_1	
+#define ECHO_TIMEOUT_CNT 60
    
 int count;
 
@@ -63,7 +64,7 @@ void EXTI1_IRQHandler(void)
 			   count=	1;               
             while(count)	                 
 			{
-					if(TIM_GetCounter(TIM1)>=10) 
+          if(TIM_GetCounter(TIM1)>=ECHO_TIMEOUT_CNT) 
 					{ 
 					    TIM_Cmd(TIM1, DISABLE); 	
 						count=0;					

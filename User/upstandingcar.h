@@ -35,6 +35,7 @@
 #define FIXED_TURN_CMD         0.0f
 
 #define EIGHT_DEFAULT_BASE_SPEED_CMD   200.0f
+// Figure-eight turn amplitude.
 #define EIGHT_DEFAULT_TURN_AMPL_CMD    100.0f
 #define EIGHT_DEFAULT_OMEGA_RAD        1.20f
 #define EIGHT_DEFAULT_START_PHASE_RAD  1.5707963f
@@ -44,8 +45,16 @@
 // Straight mode target speed command.
 #define STRAIGHT_DEFAULT_SPEED_CMD     100.0f
 // Ultrasonic obstacle thresholds (unit: cm).
-#define ULTRA_OBS_SLOW_CM              30.0f
-#define ULTRA_OBS_STOP_CM              5.0f
+#define ULTRA_OBS_SLOW_CM              25.0f
+#define ULTRA_OBS_STOP_CM              10.0f
+#define ULTRA_OBS_VALID_MIN_CM         2.5f
+#define ULTRA_OBS_CONFIRM_CNT          12u
+#define ULTRA_OBS_STOP_CONFIRM_CNT     4u
+// Right-avoid command when obstacle is detected in straight mode.
+#define ULTRA_OBS_RIGHT_AVOID_SPEED_CMD 90.0f
+// Obstacle-avoid right turn amplitude.
+#define ULTRA_OBS_RIGHT_AVOID_TURN_CMD  90.0f
+#define ULTRA_OBS_RIGHT_TURN_SPEED_RATIO 0.80f
 
 #define WHEEL_BALANCE_ENABLE           1
 #define WHEEL_BALANCE_KP               0.16f
@@ -100,6 +109,8 @@ extern void CarStateOut(void);
 extern void SendAutoUp(void);
 
 void AutoRun_SetStraight(float speedCmd);
+// Runtime API to update obstacle-avoid speed and turn amplitude.
+void AutoRun_SetObsRightAvoid(float avoidSpeedCmd, float avoidTurnCmd);
 void AutoRun_SetFigureEight(float baseSpeedCmd, float turnAmplCmd, float omegaRad, float startPhaseRad, float speedModRatio);
 void AutoRun_SetFixed(float speedCmd, float turnCmd);
 
