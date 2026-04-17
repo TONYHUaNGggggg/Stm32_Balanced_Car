@@ -34,36 +34,64 @@
 #define FIXED_SPEED_CMD        0.0f
 #define FIXED_TURN_CMD         0.0f
 
+// 8字轨迹单段弧线的速度指令。
 #define EIGHT_DEFAULT_BASE_SPEED_CMD   200.0f
-// Figure-eight turn amplitude.
+// 8字轨迹单段弧线的转向幅度指令。
 #define EIGHT_DEFAULT_TURN_AMPL_CMD    100.0f
+// 兼容旧接口的参数。
 #define EIGHT_DEFAULT_OMEGA_RAD        1.20f
 #define EIGHT_DEFAULT_START_PHASE_RAD  1.5707963f
 #define EIGHT_CTRL_DT_SEC              0.005f
 #define EIGHT_DEFAULT_SPEED_MOD_RATIO  0.15f
+// 8字轨迹由两个弧线任务组成（左圆 + 右圆）。
+#define EIGHT_ARC_DURATION_TICK        900u
+#define EIGHT_ARC_ACCEL_STEP           0.35f
+#define EIGHT_ARC_START_RIGHT          1u
 
-// Straight mode target speed command.
+// 单任务运动约束（速度/转向 + 时长 + 加速步长）。
+#define MOTION_SPEED_CMD_MAX           260.0f
+#define MOTION_SPEED_CMD_MIN           (-260.0f)
+#define MOTION_TURN_CMD_MAX            260.0f
+#define MOTION_TURN_CMD_MIN            (-260.0f)
+#define MOTION_TASK_DURATION_MIN_TICK  1u
+#define MOTION_TASK_DURATION_MAX_TICK  5000u
+#define MOTION_ACCEL_STEP_MIN          0.01f
+#define MOTION_ACCEL_STEP_MAX          3.00f
+#define MOTION_DEFAULT_ACCEL_STEP      0.35f
+
+// 直行模式目标速度。
 #define STRAIGHT_DEFAULT_SPEED_CMD     100.0f
-// Ultrasonic obstacle thresholds (unit: cm).
+// 超声波避障阈值（单位：cm）。
 #define ULTRA_OBS_SLOW_CM              25.0f
 #define ULTRA_OBS_STOP_CM              10.0f
 #define ULTRA_OBS_VALID_MIN_CM         2.5f
 #define ULTRA_OBS_CONFIRM_CNT          12u
 #define ULTRA_OBS_STOP_CONFIRM_CNT     4u
-// Right-avoid command when obstacle is detected in straight mode.
+// 直行模式检测到障碍时的右避障速度指令。
 #define ULTRA_OBS_RIGHT_AVOID_SPEED_CMD 90.0f
-// Obstacle-avoid right turn amplitude.
+// 右避障转向幅度。
 #define ULTRA_OBS_RIGHT_AVOID_TURN_CMD  90.0f
 #define ULTRA_OBS_RIGHT_TURN_SPEED_RATIO 0.80f
 
 #define WHEEL_BALANCE_ENABLE           1
-#define WHEEL_BALANCE_KP               0.16f
-#define WHEEL_BALANCE_KI               0.003f
+#define WHEEL_BALANCE_KP               0.0f
+#define WHEEL_BALANCE_KI               0.0f
 #define WHEEL_BALANCE_I_LIMIT          40.0f
 #define WHEEL_BALANCE_OUT_LIMIT        80.0f
-// Wheel-balance compensation starts from this speed command.
-#define WHEEL_BALANCE_ACTIVE_SPEED_CMD 30.0f
+// 轮速平衡补偿在该速度以上生效。
+#define WHEEL_BALANCE_ACTIVE_SPEED_CMD 80.0f
 #define WHEEL_BALANCE_ERR_DEADBAND     2.0f
+
+// 直行基速人工偏置：用于先手工校正左右轮差，再做转向。
+#define WHEEL_BASE_BIAS_ENABLE             1
+// 左轮基速偏置（>0 左轮更快，<0 左轮更慢）。
+#define WHEEL_LEFT_BASE_BIAS               0.0f
+// 右轮基速偏置（>0 右轮更快，<0 右轮更慢）。
+#define WHEEL_RIGHT_BASE_BIAS              6.0f
+// 仅在该速度以上启用基速偏置，避免低速抖动。
+#define WHEEL_BASE_BIAS_ACTIVE_SPEED_CMD   30.0f
+// 仅在接近直行（方向指令绝对值小于阈值）时启用基速偏置。
+#define WHEEL_BASE_BIAS_STRAIGHT_DIR_MAX   25.0f
 
 #define	MOTOR_LEFT_AIN1_LOW			(GPIO_ResetBits(GPIOB, GPIO_Pin_15))  
 #define	MOTOR_LEFT_AIN1_HIGH		(GPIO_SetBits(GPIOB, GPIO_Pin_15))	  
@@ -109,10 +137,23 @@ extern void CarStateOut(void);
 extern void SendAutoUp(void);
 
 void AutoRun_SetStraight(float speedCmd);
-// Runtime API to update obstacle-avoid speed and turn amplitude.
+// 运行时动态更新避障速度与转向幅度。
 void AutoRun_SetObsRightAvoid(float avoidSpeedCmd, float avoidTurnCmd);
+// 用双弧线参数配置8字轨迹：速度 + 转向 + 单弧时长 + 加速步长。
+void AutoRun_SetFigureEightArc(float arcSpeedCmd, float arcTurnCmd, u16 arcDurationTick, float accelStep, u8 startRightArc);
 void AutoRun_SetFigureEight(float baseSpeedCmd, float turnAmplCmd, float omegaRad, float startPhaseRad, float speedModRatio);
 void AutoRun_SetFixed(float speedCmd, float turnCmd);
+
+// 单任务运动接口，便于独立调参与调试。
+void MotionTask_SetStraight(float targetSpeedCmd, float accelStep, u16 durationTick);
+// 直行单任务（含避障开关）：obsEnable=1开启超声波避障，0关闭。
+void MotionTask_SetStraightWithObs(float targetSpeedCmd, float accelStep, u16 durationTick, u8 obsEnable);
+// 运行中动态开关直行任务避障：1开启，0关闭。
+void MotionTask_SetStraightObsAvoidEnable(u8 obsEnable);
+void MotionTask_SetArc(float speedCmd, float turnCmd, u16 durationTick);
+void MotionTask_SetTurn(float speedCmd, float turnCmd, u16 durationTick);
+void MotionTask_SetSpin(float turnCmd, u16 durationTick);
+void MotionTask_Stop(void);
 
 
 void delay_nms(u16 time);

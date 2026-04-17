@@ -32,7 +32,8 @@ static u8 BST_u8MainEventLast = 0;
 typedef enum {
 	enAutoRunStraight = 0,
 	enAutoRunFigureEight,
-	enAutoRunFixed
+	enAutoRunFixed,
+	enAutoRunTask
 } enAutoRunMode;
 
 typedef struct {
@@ -42,6 +43,25 @@ typedef struct {
 	float fStartPhaseRad;
 	float fSpeedModRatio;
 } stFigureEightParam;
+
+typedef enum {
+	enMotionTaskIdle = 0,
+	enMotionTaskStraight,
+	enMotionTaskArc,
+	enMotionTaskTurn,
+	enMotionTaskSpin
+} enMotionTaskType;
+
+typedef struct {
+	enMotionTaskType enType;
+	float fTargetSpeedCmd;
+	float fTargetTurnCmd;
+	float fCurrentSpeedCmd;
+	float fAccelStepPerTick;
+	u16 u16DurationTick;
+	u16 u16ElapsedTick;
+	u8 u8Active;
+} stMotionTask;
 
 static enAutoRunMode g_enAutoRunMode = enAutoRunStraight;
 static stFigureEightParam g_stFigureEightParam = {
@@ -56,6 +76,21 @@ static float g_fFixedSpeedCmd = FIXED_SPEED_CMD;
 static float g_fFixedTurnCmd = FIXED_TURN_CMD;
 static float g_fObsRightAvoidSpeedCmd = ULTRA_OBS_RIGHT_AVOID_SPEED_CMD;
 static float g_fObsRightAvoidTurnCmd = ULTRA_OBS_RIGHT_AVOID_TURN_CMD;
+static stMotionTask g_stMotionTask = {
+	enMotionTaskIdle,
+	0.0f,
+	0.0f,
+	0.0f,
+	MOTION_DEFAULT_ACCEL_STEP,
+	MOTION_TASK_DURATION_MIN_TICK,
+	0,
+	0
+};
+static u16 g_u16EightArcDurationTick = EIGHT_ARC_DURATION_TICK;
+static float g_fEightArcAccelStep = EIGHT_ARC_ACCEL_STEP;
+static u8 g_u8EightArcStartRight = EIGHT_ARC_START_RIGHT;
+static u8 g_u8EightArcIndex = 0;
+static u8 g_u8TaskStraightObsEnable = 0;
 static u8 g_u8ObsConfirmCnt = 0;
 static u8 g_u8ObsStopConfirmCnt = 0;
 static u8 BST_u8StraightEventLast = 0;
@@ -95,8 +130,8 @@ float gyrx;
 float gy0;
 
 
-float  BST_fCarAngle_P = 170.0;
-float  BST_fCarAngle_D = 0.24;
+float  BST_fCarAngle_P = 210.0;
+float  BST_fCarAngle_D = 0.35;
 
 float  BST_fCarSpeed_P = 4.5;
 float  BST_fCarSpeed_I = 0.12;
@@ -167,6 +202,11 @@ float  PP[2][2] = { { 1, 0 },{ 0, 1 } };
 void SendAutoUp(void);
 static void FigureEightControl(void);
 static void StraightAvoidControl(void);
+static void MotionTaskControl(void);
+static float MotionClampFloat(float fValue, float fMin, float fMax);
+static void MotionTaskStartInternal(enMotionTaskType enType, float fSpeedCmd, float fTurnCmd, float fAccelStep, u16 u16DurationTick, u8 u8EnterTaskMode);
+static u8 MotionTaskRunStep(u8 u8DeltaTick, float *pfSpeedCmd, float *pfTurnCmd);
+static void MotionApplyObstacleAvoid(float *pfSpeedCmd, float *pfDirectionCmd);
 
 
 void delay_nms(u16 time)
@@ -206,6 +246,11 @@ void CarUpstandInit(void)
 	BST_u8MainEventLast=BST_u8MainEventCount;
 	BST_u32EightTick=0;
 	BST_u8StraightEventLast=BST_u8MainEventCount;
+	g_u16EightArcDurationTick = EIGHT_ARC_DURATION_TICK;
+	g_fEightArcAccelStep = EIGHT_ARC_ACCEL_STEP;
+	g_u8EightArcStartRight = EIGHT_ARC_START_RIGHT;
+	g_u8EightArcIndex = 0;
+	g_u8TaskStraightObsEnable = 0;
 	g_fWheelBalanceI = 0.0f;
 	g_fWheelBalanceOut = 0.0f;
 	AutoRun_SetStraight(STRAIGHT_DEFAULT_SPEED_CMD);
@@ -331,14 +376,28 @@ void SetMotorVoltageAndDirection(s16 s16LeftVoltage,s16 s16RightVoltage)
 void MotorOutput(void)																					  
 {	   
 	float fDirectionCmd;
+	float fLeftBaseBias;
+	float fRightBaseBias;
 			
 	fDirectionCmd = BST_fBluetoothDirectionNew;
 #if WHEEL_BALANCE_ENABLE
 	fDirectionCmd += g_fWheelBalanceOut;
 #endif
 
-	BST_fLeftMotorOut  = BST_fAngleControlOut + fDirectionCmd;
-    BST_fRightMotorOut = BST_fAngleControlOut - fDirectionCmd;
+	fLeftBaseBias = 0.0f;
+	fRightBaseBias = 0.0f;
+#if WHEEL_BASE_BIAS_ENABLE
+	if(stopflag == 0
+		&& fabsf(BST_fBluetoothSpeed) >= WHEEL_BASE_BIAS_ACTIVE_SPEED_CMD
+		&& fabsf(BST_fBluetoothDirectionNew) <= WHEEL_BASE_BIAS_STRAIGHT_DIR_MAX)
+	{
+		fLeftBaseBias = WHEEL_LEFT_BASE_BIAS;
+		fRightBaseBias = WHEEL_RIGHT_BASE_BIAS;
+	}
+#endif
+
+	BST_fLeftMotorOut  = BST_fAngleControlOut + fDirectionCmd + fLeftBaseBias;
+    BST_fRightMotorOut = BST_fAngleControlOut - fDirectionCmd + fRightBaseBias;
 
 		
 	if((s16)BST_fLeftMotorOut  > MOTOR_OUT_MAX)	BST_fLeftMotorOut  = MOTOR_OUT_MAX;
@@ -464,6 +523,7 @@ void chaoshengbo(void)
 	{
 	
       	juli=TIM_GetCounter(TIM1)*5*34/200.0;
+		printf("juli=%f\n",juli);
 		if(g_enAutoRunMode == enAutoRunStraight)
 		{
 			fchaoshengbo = 0;
@@ -612,10 +672,164 @@ void SendAutoUp(void)
 
 }
 
+static float MotionClampFloat(float fValue, float fMin, float fMax)
+{
+	if(fValue > fMax)
+	{
+		return fMax;
+	}
+	if(fValue < fMin)
+	{
+		return fMin;
+	}
+	return fValue;
+}
+
+static void MotionTaskStartInternal(enMotionTaskType enType, float fSpeedCmd, float fTurnCmd, float fAccelStep, u16 u16DurationTick, u8 u8EnterTaskMode)
+{
+	fSpeedCmd = MotionClampFloat(fSpeedCmd, MOTION_SPEED_CMD_MIN, MOTION_SPEED_CMD_MAX);
+	fTurnCmd = MotionClampFloat(fTurnCmd, MOTION_TURN_CMD_MIN, MOTION_TURN_CMD_MAX);
+
+	if(fAccelStep < 0.0f)
+	{
+		fAccelStep = -fAccelStep;
+	}
+	fAccelStep = MotionClampFloat(fAccelStep, MOTION_ACCEL_STEP_MIN, MOTION_ACCEL_STEP_MAX);
+
+	if(u16DurationTick < MOTION_TASK_DURATION_MIN_TICK)
+	{
+		u16DurationTick = MOTION_TASK_DURATION_MIN_TICK;
+	}
+	if(u16DurationTick > MOTION_TASK_DURATION_MAX_TICK)
+	{
+		u16DurationTick = MOTION_TASK_DURATION_MAX_TICK;
+	}
+
+	if(enType == enMotionTaskStraight)
+	{
+		fTurnCmd = 0.0f;
+	}
+	if(enType == enMotionTaskSpin)
+	{
+		fSpeedCmd = 0.0f;
+	}
+
+	g_stMotionTask.enType = enType;
+	g_stMotionTask.fTargetSpeedCmd = fSpeedCmd;
+	g_stMotionTask.fTargetTurnCmd = fTurnCmd;
+	g_stMotionTask.fCurrentSpeedCmd = BST_fBluetoothSpeed;
+	g_stMotionTask.fAccelStepPerTick = fAccelStep;
+	g_stMotionTask.u16DurationTick = u16DurationTick;
+	g_stMotionTask.u16ElapsedTick = 0;
+	g_stMotionTask.u8Active = 1;
+
+	if(u8EnterTaskMode != 0)
+	{
+		g_enAutoRunMode = enAutoRunTask;
+		BST_u8MainEventLast = BST_u8MainEventCount;
+	}
+}
+
+static u8 MotionTaskRunStep(u8 u8DeltaTick, float *pfSpeedCmd, float *pfTurnCmd)
+{
+	u8 u8Step;
+	float fDeltaSpeed;
+
+	if(g_stMotionTask.u8Active == 0)
+	{
+		*pfSpeedCmd = 0.0f;
+		*pfTurnCmd = 0.0f;
+		return 0;
+	}
+
+	for(u8Step = 0; u8Step < u8DeltaTick; u8Step++)
+	{
+		fDeltaSpeed = g_stMotionTask.fTargetSpeedCmd - g_stMotionTask.fCurrentSpeedCmd;
+		if(fabsf(fDeltaSpeed) <= g_stMotionTask.fAccelStepPerTick)
+		{
+			g_stMotionTask.fCurrentSpeedCmd = g_stMotionTask.fTargetSpeedCmd;
+		}
+		else if(fDeltaSpeed > 0.0f)
+		{
+			g_stMotionTask.fCurrentSpeedCmd += g_stMotionTask.fAccelStepPerTick;
+		}
+		else
+		{
+			g_stMotionTask.fCurrentSpeedCmd -= g_stMotionTask.fAccelStepPerTick;
+		}
+
+		if(g_stMotionTask.u16ElapsedTick < g_stMotionTask.u16DurationTick)
+		{
+			g_stMotionTask.u16ElapsedTick++;
+		}
+		if(g_stMotionTask.u16ElapsedTick >= g_stMotionTask.u16DurationTick)
+		{
+			g_stMotionTask.u8Active = 0;
+			break;
+		}
+	}
+
+	*pfSpeedCmd = g_stMotionTask.fCurrentSpeedCmd;
+	*pfTurnCmd = g_stMotionTask.fTargetTurnCmd;
+
+	if(g_stMotionTask.u8Active == 0)
+	{
+		return 2;
+	}
+	return 1;
+}
+
+void MotionTask_SetStraight(float targetSpeedCmd, float accelStep, u16 durationTick)
+{
+	g_u8TaskStraightObsEnable = 0;
+	MotionTaskStartInternal(enMotionTaskStraight, targetSpeedCmd, 0.0f, accelStep, durationTick, 1);
+}
+
+void MotionTask_SetStraightWithObs(float targetSpeedCmd, float accelStep, u16 durationTick, u8 obsEnable)
+{
+	g_u8TaskStraightObsEnable = (obsEnable == 0u) ? 0u : 1u;
+	g_u8ObsConfirmCnt = 0;
+	g_u8ObsStopConfirmCnt = 0;
+	MotionTaskStartInternal(enMotionTaskStraight, targetSpeedCmd, 0.0f, accelStep, durationTick, 1);
+}
+
+void MotionTask_SetStraightObsAvoidEnable(u8 obsEnable)
+{
+	g_u8TaskStraightObsEnable = (obsEnable == 0u) ? 0u : 1u;
+	g_u8ObsConfirmCnt = 0;
+	g_u8ObsStopConfirmCnt = 0;
+}
+
+void MotionTask_SetArc(float speedCmd, float turnCmd, u16 durationTick)
+{
+	MotionTaskStartInternal(enMotionTaskArc, speedCmd, turnCmd, MOTION_DEFAULT_ACCEL_STEP, durationTick, 1);
+}
+
+void MotionTask_SetTurn(float speedCmd, float turnCmd, u16 durationTick)
+{
+	MotionTaskStartInternal(enMotionTaskTurn, speedCmd, turnCmd, MOTION_DEFAULT_ACCEL_STEP, durationTick, 1);
+}
+
+void MotionTask_SetSpin(float turnCmd, u16 durationTick)
+{
+	MotionTaskStartInternal(enMotionTaskSpin, 0.0f, turnCmd, MOTION_DEFAULT_ACCEL_STEP, durationTick, 1);
+}
+
+void MotionTask_Stop(void)
+{
+	g_stMotionTask.u8Active = 0;
+	g_stMotionTask.enType = enMotionTaskIdle;
+	g_stMotionTask.fTargetSpeedCmd = 0.0f;
+	g_stMotionTask.fTargetTurnCmd = 0.0f;
+	g_stMotionTask.fCurrentSpeedCmd = BST_fBluetoothSpeed;
+	g_stMotionTask.u16ElapsedTick = 0;
+}
+
 void AutoRun_SetStraight(float speedCmd)
 {
 	g_enAutoRunMode = enAutoRunStraight;
 	g_fStraightSpeedCmd = speedCmd;
+	MotionTask_Stop();
 	g_u8ObsConfirmCnt = 0;
 	g_u8ObsStopConfirmCnt = 0;
 	BST_u8MainEventLast = BST_u8MainEventCount;
@@ -637,8 +851,43 @@ void AutoRun_SetObsRightAvoid(float avoidSpeedCmd, float avoidTurnCmd)
 	g_fObsRightAvoidTurnCmd = avoidTurnCmd;
 }
 
+void AutoRun_SetFigureEightArc(float arcSpeedCmd, float arcTurnCmd, u16 arcDurationTick, float accelStep, u8 startRightArc)
+{
+	arcSpeedCmd = fabsf(arcSpeedCmd);
+	arcTurnCmd = fabsf(arcTurnCmd);
+
+	g_stFigureEightParam.fBaseSpeedCmd = MotionClampFloat(arcSpeedCmd, 0.0f, MOTION_SPEED_CMD_MAX);
+	g_stFigureEightParam.fTurnAmplCmd = MotionClampFloat(arcTurnCmd, 0.0f, MOTION_TURN_CMD_MAX);
+	g_u16EightArcDurationTick = arcDurationTick;
+	if(g_u16EightArcDurationTick < MOTION_TASK_DURATION_MIN_TICK)
+	{
+		g_u16EightArcDurationTick = MOTION_TASK_DURATION_MIN_TICK;
+	}
+	if(g_u16EightArcDurationTick > MOTION_TASK_DURATION_MAX_TICK)
+	{
+		g_u16EightArcDurationTick = MOTION_TASK_DURATION_MAX_TICK;
+	}
+	g_fEightArcAccelStep = MotionClampFloat(fabsf(accelStep), MOTION_ACCEL_STEP_MIN, MOTION_ACCEL_STEP_MAX);
+	g_u8EightArcStartRight = (startRightArc == 0u) ? 0u : 1u;
+	g_u8EightArcIndex = 0;
+
+	g_stFigureEightParam.fOmegaRad = 6.2831853f / ((float)g_u16EightArcDurationTick * EIGHT_CTRL_DT_SEC);
+	g_stFigureEightParam.fStartPhaseRad = (g_u8EightArcStartRight != 0u) ? 1.5707963f : -1.5707963f;
+	g_stFigureEightParam.fSpeedModRatio = 0.0f;
+
+	MotionTask_Stop();
+	g_enAutoRunMode = enAutoRunFigureEight;
+	BST_u8MainEventLast = BST_u8MainEventCount;
+	BST_u32EightTick = 0;
+}
+
 void AutoRun_SetFigureEight(float baseSpeedCmd, float turnAmplCmd, float omegaRad, float startPhaseRad, float speedModRatio)
 {
+	float fArcTickFloat;
+	u16 u16ArcTick;
+	float fAccelStep;
+	u8 u8StartRight;
+
 	if(omegaRad < 0.10f)
 	{
 		omegaRad = 0.10f;
@@ -652,19 +901,26 @@ void AutoRun_SetFigureEight(float baseSpeedCmd, float turnAmplCmd, float omegaRa
 		speedModRatio = 0.45f;
 	}
 
-	g_stFigureEightParam.fBaseSpeedCmd = baseSpeedCmd;
-	g_stFigureEightParam.fTurnAmplCmd = turnAmplCmd;
-	g_stFigureEightParam.fOmegaRad = omegaRad;
-	g_stFigureEightParam.fStartPhaseRad = startPhaseRad;
-	g_stFigureEightParam.fSpeedModRatio = speedModRatio;
-	g_enAutoRunMode = enAutoRunFigureEight;
-	BST_u8MainEventLast = BST_u8MainEventCount;
-	BST_u32EightTick = 0;
+	fArcTickFloat = (6.2831853f / omegaRad) / EIGHT_CTRL_DT_SEC;
+	if(fArcTickFloat < (float)MOTION_TASK_DURATION_MIN_TICK)
+	{
+		fArcTickFloat = (float)MOTION_TASK_DURATION_MIN_TICK;
+	}
+	if(fArcTickFloat > (float)MOTION_TASK_DURATION_MAX_TICK)
+	{
+		fArcTickFloat = (float)MOTION_TASK_DURATION_MAX_TICK;
+	}
+	u16ArcTick = (u16)(fArcTickFloat + 0.5f);
+	fAccelStep = MOTION_DEFAULT_ACCEL_STEP + speedModRatio * 1.2f;
+	u8StartRight = ((float)sin(startPhaseRad) >= 0.0f) ? 1u : 0u;
+
+	AutoRun_SetFigureEightArc(baseSpeedCmd, turnAmplCmd, u16ArcTick, fAccelStep, u8StartRight);
 }
 
 void AutoRun_SetFixed(float speedCmd, float turnCmd)
 {
 	g_enAutoRunMode = enAutoRunFixed;
+	MotionTask_Stop();
 	g_fFixedSpeedCmd = speedCmd;
 	g_fFixedTurnCmd = turnCmd;
 	BST_u8MainEventLast = BST_u8MainEventCount;
@@ -675,12 +931,27 @@ static void StraightAvoidControl(void)
 {
 	float fSpeedCmd;
 	float fDirectionCmd;
-	float fDirectionLimit;
-	float fObsSlowCm;
-	float fObsCm;
 
 	fSpeedCmd = g_fStraightSpeedCmd;
 	fDirectionCmd = 0.0f;
+	MotionApplyObstacleAvoid(&fSpeedCmd, &fDirectionCmd);
+
+	BST_fBluetoothSpeed = fSpeedCmd;
+	BST_fBluetoothDirectionNew = fDirectionCmd;
+	chaoflag = 0;
+	fchaoshengbo = 0;
+}
+
+static void MotionApplyObstacleAvoid(float *pfSpeedCmd, float *pfDirectionCmd)
+{
+	float fDirectionLimit;
+	float fObsSlowCm;
+	float fObsCm;
+	float fSpeedCmd;
+	float fDirectionCmd;
+
+	fSpeedCmd = *pfSpeedCmd;
+	fDirectionCmd = *pfDirectionCmd;
 	fObsSlowCm = ULTRA_OBS_SLOW_CM;
 	if(fObsSlowCm <= (ULTRA_OBS_STOP_CM + 1.0f))
 	{
@@ -713,7 +984,7 @@ static void StraightAvoidControl(void)
 		if(g_u8ObsConfirmCnt >= ULTRA_OBS_CONFIRM_CNT)
 		{
 			fSpeedCmd = g_fObsRightAvoidSpeedCmd;
-			// Obstacle-avoid turn amplitude takes effect here.
+			// 右避障转向幅度在此处生效。
 			fDirectionCmd = g_fObsRightAvoidTurnCmd;
 			fDirectionLimit = fabsf(fSpeedCmd) * ULTRA_OBS_RIGHT_TURN_SPEED_RATIO;
 			if(fDirectionCmd > fDirectionLimit)
@@ -728,30 +999,87 @@ static void StraightAvoidControl(void)
 		g_u8ObsStopConfirmCnt = 0;
 	}
 
-	BST_fBluetoothSpeed = fSpeedCmd;
-	BST_fBluetoothDirectionNew = fDirectionCmd;
-	chaoflag = 0;
-	fchaoshengbo = 0;
+	*pfSpeedCmd = fSpeedCmd;
+	*pfDirectionCmd = fDirectionCmd;
 }
 
 static void FigureEightControl(void)
 {
 	u8 u8MainEventNow;
 	u8 u8DeltaEvent;
-	float fPhase;
-	float fSpeedScale;
+	float fArcTurnCmd;
+	float fSpeedCmd;
+	float fTurnCmd;
+	u8 u8RunState;
 
 	u8MainEventNow = BST_u8MainEventCount;
 	u8DeltaEvent = (u8)(u8MainEventNow - BST_u8MainEventLast);
 	BST_u8MainEventLast = u8MainEventNow;
-	BST_u32EightTick += u8DeltaEvent;
 
-	fPhase = g_stFigureEightParam.fStartPhaseRad + g_stFigureEightParam.fOmegaRad * ((float)BST_u32EightTick * EIGHT_CTRL_DT_SEC);
-	fSpeedScale = 1.0f - g_stFigureEightParam.fSpeedModRatio + g_stFigureEightParam.fSpeedModRatio * (float)cos(2.0f * fPhase);
+	if(g_stMotionTask.u8Active == 0u)
+	{
+		if((g_u8EightArcIndex & 0x01u) == 0u)
+		{
+			fArcTurnCmd = (g_u8EightArcStartRight != 0u) ? g_stFigureEightParam.fTurnAmplCmd : (-g_stFigureEightParam.fTurnAmplCmd);
+		}
+		else
+		{
+			fArcTurnCmd = (g_u8EightArcStartRight != 0u) ? (-g_stFigureEightParam.fTurnAmplCmd) : g_stFigureEightParam.fTurnAmplCmd;
+		}
 
-	BST_fBluetoothSpeed = g_stFigureEightParam.fBaseSpeedCmd * fSpeedScale;
-	// Figure-eight turn amplitude takes effect here.
-	BST_fBluetoothDirectionNew = g_stFigureEightParam.fTurnAmplCmd * (float)sin(fPhase);
+		MotionTaskStartInternal(
+			enMotionTaskArc,
+			g_stFigureEightParam.fBaseSpeedCmd,
+			fArcTurnCmd,
+			g_fEightArcAccelStep,
+			g_u16EightArcDurationTick,
+			0
+		);
+	}
+
+	u8RunState = MotionTaskRunStep(u8DeltaEvent, &fSpeedCmd, &fTurnCmd);
+	if(u8RunState == 2u)
+	{
+		g_u8EightArcIndex ^= 1u;
+	}
+
+	BST_fBluetoothSpeed = fSpeedCmd;
+	BST_fBluetoothDirectionNew = fTurnCmd;
+	chaoflag = 1;
+	fchaoshengbo = 0;
+}
+
+static void MotionTaskControl(void)
+{
+	u8 u8MainEventNow;
+	u8 u8DeltaEvent;
+	float fSpeedCmd;
+	float fTurnCmd;
+	u8 u8RunState;
+
+	u8MainEventNow = BST_u8MainEventCount;
+	u8DeltaEvent = (u8)(u8MainEventNow - BST_u8MainEventLast);
+	BST_u8MainEventLast = u8MainEventNow;
+
+	u8RunState = MotionTaskRunStep(u8DeltaEvent, &fSpeedCmd, &fTurnCmd);
+	if(u8RunState == 0u)
+	{
+		fSpeedCmd = 0.0f;
+		fTurnCmd = 0.0f;
+	}
+
+	if(g_stMotionTask.enType == enMotionTaskStraight && g_u8TaskStraightObsEnable != 0u)
+	{
+		MotionApplyObstacleAvoid(&fSpeedCmd, &fTurnCmd);
+	}
+	else
+	{
+		g_u8ObsConfirmCnt = 0;
+		g_u8ObsStopConfirmCnt = 0;
+	}
+
+	BST_fBluetoothSpeed = fSpeedCmd;
+	BST_fBluetoothDirectionNew = fTurnCmd;
 	chaoflag = 1;
 	fchaoshengbo = 0;
 }
@@ -763,6 +1091,10 @@ void CarStateOut(void)
 	{
 		case enAutoRunFigureEight:
 			FigureEightControl();
+			break;
+
+		case enAutoRunTask:
+			MotionTaskControl();
 			break;
 
 		case enAutoRunFixed:

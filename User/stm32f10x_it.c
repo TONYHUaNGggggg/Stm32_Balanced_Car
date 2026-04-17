@@ -82,6 +82,7 @@ void SysTick_Handler(void)
 		UltrasonicWave_StartMeasure();	
 		chaoshengbo();			       
 		BST_u8trig=0;
+		
 	}
     if(BST_u8SpeedControlCount>=8)       
 	{	

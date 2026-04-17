@@ -1,5 +1,3 @@
-
-
 #include "mpu6050.h"
 #include "i2c_mpu6050.h"
 #include "motor.h"
@@ -13,9 +11,16 @@
 #include "timer.h"
 #include "UltrasonicWave.h"
 
-#define STARTUP_BALANCE_TICKS   1000u
-// Startup running speed after the initial balance-hold window.
-#define STARTUP_RUN_SPEED_CMD   110.0f
+// 起步静止平衡时间，单位tick（1 tick=5ms）。
+#define STARTUP_BALANCE_TICKS   500u
+// 直行单任务调参参数：目标速度（越大越快）。
+#define STARTUP_STRAIGHT_SPEED_CMD       150.0f
+// 直行单任务调参参数：每个控制节拍的加速步长（越大加速越快）。
+#define STARTUP_STRAIGHT_ACCEL_STEP      0.35f
+// 直行单任务调参参数：任务持续时间，单位tick（duration*5ms）。
+#define STARTUP_STRAIGHT_DURATION_TICK   1000u
+// 直行任务是否开启超声波避障：1开启，0关闭。
+#define STARTUP_STRAIGHT_OBS_ENABLE      1u
 
 
 float gyz;
@@ -62,7 +67,8 @@ int main(void)
 	{
 
 
-		MPU6050_Pose();						 
+		MPU6050_Pose();		
+		
 
 		if(u8StartupDone == 0)
 		{
@@ -71,7 +77,12 @@ int main(void)
 			u8MainEventLast = u8MainEventNow;
 			if(u32StartupTicks >= STARTUP_BALANCE_TICKS)
 			{
-				AutoRun_SetStraight(STARTUP_RUN_SPEED_CMD);
+				MotionTask_SetStraightWithObs(
+					STARTUP_STRAIGHT_SPEED_CMD,
+					STARTUP_STRAIGHT_ACCEL_STEP,
+					STARTUP_STRAIGHT_DURATION_TICK,
+					STARTUP_STRAIGHT_OBS_ENABLE
+				);
 				u8StartupDone = 1;
 			}
 		}
