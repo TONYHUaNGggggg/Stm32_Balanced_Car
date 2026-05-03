@@ -10,8 +10,9 @@
 #define    CAR_ZERO_ANGLE (0)		 
 
 
-#define CAR_POSITION_SET      0
 #define CAR_SPEED_SET         0
+// 速度命令极性：若正速度命令方向与期望相反，改为 -1.0f。
+#define SPEED_CMD_POLARITY    (-1.0f)
 #define MOTOR_LEFT_SPEED_POSITIVE  (BST_fLeftMotorOut >0)
 #define MOTOR_RIGHT_SPEED_POSITIVE (BST_fRightMotorOut>0)
 #define OPTICAL_ENCODE_CONSTANT  13	
@@ -20,8 +21,15 @@
 
 
 
-#define CAR_POSITION_MAX	8000       
-#define CAR_POSITION_MIN	(-8000)     
+#define SPEED_ERR_I_MAX	8000
+#define SPEED_ERR_I_MIN	(-8000)
+// 速度指令接近0时的停稳控制参数（用于抑制刹停大幅摆动）。
+#define SPEED_STOP_CMD_DEADBAND         8.0f
+#define SPEED_STOP_ACTUAL_DEADBAND      30.0f
+#define SPEED_STOP_ANGLE_REF_MAX        1.2f
+#define SPEED_I_BLEED_WHEN_STOP         0.90f
+#define SPEED_I_UNWIND_GAIN             2.2f
+#define ANGLE_REF_SLEW_STEP             0.20f
 #define CAR_ANGLE_REF_MAX   6.0f
 #define CAR_ANGLE_REF_MIN   (-6.0f)
 
@@ -73,21 +81,15 @@
 #define ULTRA_OBS_RIGHT_AVOID_TURN_CMD  90.0f
 #define ULTRA_OBS_RIGHT_TURN_SPEED_RATIO 0.80f
 
-#define WHEEL_BALANCE_ENABLE           1
-#define WHEEL_BALANCE_KP               0.0f
-#define WHEEL_BALANCE_KI               0.0f
-#define WHEEL_BALANCE_I_LIMIT          40.0f
-#define WHEEL_BALANCE_OUT_LIMIT        80.0f
-// 轮速平衡补偿在该速度以上生效。
-#define WHEEL_BALANCE_ACTIVE_SPEED_CMD 80.0f
-#define WHEEL_BALANCE_ERR_DEADBAND     2.0f
+// 关闭轮速动态补偿，仅保留固定基速偏置。
+#define WHEEL_BALANCE_ENABLE           0
 
 // 直行基速人工偏置：用于先手工校正左右轮差，再做转向。
 #define WHEEL_BASE_BIAS_ENABLE             1
 // 左轮基速偏置（>0 左轮更快，<0 左轮更慢）。
 #define WHEEL_LEFT_BASE_BIAS               0.0f
 // 右轮基速偏置（>0 右轮更快，<0 右轮更慢）。
-#define WHEEL_RIGHT_BASE_BIAS              6.0f
+#define WHEEL_RIGHT_BASE_BIAS              8.0f
 // 仅在该速度以上启用基速偏置，避免低速抖动。
 #define WHEEL_BASE_BIAS_ACTIVE_SPEED_CMD   30.0f
 // 仅在接近直行（方向指令绝对值小于阈值）时启用基速偏置。
@@ -128,6 +130,7 @@ extern float gyrx;
 extern float gyry;
 extern float accelx,accely,accelz,gyrx,gyry,gyrz;
 extern float BST_fLeftMotorOut,BST_fRightMotorOut,BST_fBluetoothDirectionNew;
+extern float BST_fCarSpeedOld;
 extern s16 BST_s16LeftMotorPulse,BST_s16RightMotorPulse;
 extern float juli;
 extern 	int x,y1,z1,y2,z2,flagbt;
@@ -158,6 +161,7 @@ void MotionTask_Stop(void);
 
 void delay_nms(u16 time);
 void CarUpstandInit(void);
+void SpeedControl_ResetStopState(void);
 
 void AngleControl(void)	 ;
 void MotorOutput(void);

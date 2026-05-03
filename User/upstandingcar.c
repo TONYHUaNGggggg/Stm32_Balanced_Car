@@ -94,8 +94,8 @@ static u8 g_u8TaskStraightObsEnable = 0;
 static u8 g_u8ObsConfirmCnt = 0;
 static u8 g_u8ObsStopConfirmCnt = 0;
 static u8 BST_u8StraightEventLast = 0;
-static float g_fWheelBalanceI = 0.0f;
-static float g_fWheelBalanceOut = 0.0f;
+static float g_fSpeedErrIntegral = 0.0f;
+static float g_fAngleRefFiltered = 0.0f;
 
 
 char manydisplay[80] ={0};
@@ -130,11 +130,11 @@ float gyrx;
 float gy0;
 
 
-float  BST_fCarAngle_P = 210.0;
-float  BST_fCarAngle_D = 0.35;
+float  BST_fCarAngle_P = 150.0;
+float  BST_fCarAngle_D = 0.28;
 
 float  BST_fCarSpeed_P = 4.5;
-float  BST_fCarSpeed_I = 0.12;
+float  BST_fCarSpeed_I = 0.08;
 
 const double PID_Original[4] ={170.0, 0.24, 4.5, 0.12}; 
 char  alldata[80];
@@ -151,8 +151,6 @@ s32   BST_s32RightMotorPulseSigma;
 
 float BST_fCarSpeed;							 
 float BST_fCarSpeedOld;
-
-float BST_fCarPosition;						   
 
 
 int leftstop=0;
@@ -230,7 +228,6 @@ void CarUpstandInit(void)
 	BST_s32LeftMotorPulseSigma = BST_s32RightMotorPulseSigma = 0;		  
 
 	BST_fCarSpeed = BST_fCarSpeedOld = 0;								   
-	BST_fCarPosition = 0;												  
 	BST_fCarAngle    = 0;												  
 	BST_fAngleRef    = 0;
 
@@ -251,8 +248,8 @@ void CarUpstandInit(void)
 	g_u8EightArcStartRight = EIGHT_ARC_START_RIGHT;
 	g_u8EightArcIndex = 0;
 	g_u8TaskStraightObsEnable = 0;
-	g_fWheelBalanceI = 0.0f;
-	g_fWheelBalanceOut = 0.0f;
+	g_fSpeedErrIntegral = 0.0f;
+	g_fAngleRefFiltered = 0.0f;
 	AutoRun_SetStraight(STRAIGHT_DEFAULT_SPEED_CMD);
 
 	fchaoshengbo=0;											
@@ -279,10 +276,18 @@ void ResetPID()
 	{
 		BST_fCarSpeed_I = PID_Original[3];
 	}
-	g_fWheelBalanceI = 0.0f;
-	g_fWheelBalanceOut = 0.0f;
+	g_fSpeedErrIntegral = 0.0f;
+	g_fAngleRefFiltered = 0.0f;
 
 }	
+
+void SpeedControl_ResetStopState(void)
+{
+	g_fSpeedErrIntegral = 0.0f;
+	g_fAngleRefFiltered = 0.0f;
+	BST_fSpeedControlOutNew = 0.0f;
+	BST_fAngleRef = 0.0f;
+}
 
 
 void AngleControl(void)	 
@@ -380,9 +385,6 @@ void MotorOutput(void)
 	float fRightBaseBias;
 			
 	fDirectionCmd = BST_fBluetoothDirectionNew;
-#if WHEEL_BALANCE_ENABLE
-	fDirectionCmd += g_fWheelBalanceOut;
-#endif
 
 	fLeftBaseBias = 0.0f;
 	fRightBaseBias = 0.0f;
@@ -431,32 +433,43 @@ void GetMotorPulse(void)
 
 void SpeedControl(void)
 {
-  float fPulseDiff;
+	float fSpeedCmdCtrl;
+	float fSpeedErr;
+	float fIntegralStep;
+	float fAbsCmd;
+	float fAbsSpeed;
+	float fAngleRefTarget;
+	float fAngleRefDelta;
   
  
 	BST_fCarSpeed = (BST_s32LeftMotorPulseSigma  + BST_s32RightMotorPulseSigma );
-	fPulseDiff = (float)(BST_s32RightMotorPulseSigma - BST_s32LeftMotorPulseSigma);
-	if(fPulseDiff > -WHEEL_BALANCE_ERR_DEADBAND && fPulseDiff < WHEEL_BALANCE_ERR_DEADBAND)
-	{
-		fPulseDiff = 0.0f;
-	}
 	BST_s32LeftMotorPulseSigma =BST_s32RightMotorPulseSigma = 0;	  
 	BST_fCarSpeedOld *= 0.7;
 	BST_fCarSpeedOld +=BST_fCarSpeed*0.3;
-	
-	BST_fCarPosition += BST_fCarSpeedOld; 		 
-	BST_fCarPosition += BST_fBluetoothSpeed;   
-	BST_fCarPosition +=	fchaoshengbo;		   
-	if(stopflag==1)
-	{
-		BST_fCarPosition=0;
-		
-	}
-	
 
-	
-	if((s32)BST_fCarPosition > CAR_POSITION_MAX)    BST_fCarPosition = CAR_POSITION_MAX;
-	if((s32)BST_fCarPosition < CAR_POSITION_MIN)    BST_fCarPosition = CAR_POSITION_MIN;
+	fSpeedCmdCtrl = BST_fBluetoothSpeed * SPEED_CMD_POLARITY;
+	fSpeedErr = fSpeedCmdCtrl - BST_fCarSpeedOld;
+	fAbsCmd = fabsf(fSpeedCmdCtrl);
+	fAbsSpeed = fabsf(BST_fCarSpeedOld);
+
+	fIntegralStep = fSpeedErr;
+	if(g_fSpeedErrIntegral * fSpeedErr < 0.0f)
+	{
+		fIntegralStep *= SPEED_I_UNWIND_GAIN;
+	}
+	g_fSpeedErrIntegral += fIntegralStep;
+
+	if(fAbsCmd <= SPEED_STOP_CMD_DEADBAND)
+	{
+		g_fSpeedErrIntegral *= SPEED_I_BLEED_WHEN_STOP;
+		if(fAbsSpeed <= SPEED_STOP_ACTUAL_DEADBAND)
+		{
+			g_fSpeedErrIntegral *= SPEED_I_BLEED_WHEN_STOP;
+		}
+	}
+
+	if(g_fSpeedErrIntegral > SPEED_ERR_I_MAX) g_fSpeedErrIntegral = SPEED_ERR_I_MAX;
+	if(g_fSpeedErrIntegral < SPEED_ERR_I_MIN) g_fSpeedErrIntegral = SPEED_ERR_I_MIN;
 	
 		if(flagbt==3)
 	{
@@ -471,44 +484,41 @@ void SpeedControl(void)
 	
 
 																								  
-	BST_fSpeedControlOutNew = (BST_fCarSpeedOld -CAR_SPEED_SET ) * BST_fCarSpeed_P + (BST_fCarPosition - CAR_POSITION_SET ) * BST_fCarSpeed_I; 
+	BST_fSpeedControlOutNew = -(fSpeedErr * BST_fCarSpeed_P + g_fSpeedErrIntegral * BST_fCarSpeed_I);
 
 	if(BST_fCarAngle_P > 0.001f || BST_fCarAngle_P < -0.001f)
 	{
-		BST_fAngleRef = -BST_fSpeedControlOutNew / BST_fCarAngle_P;
+		fAngleRefTarget = -BST_fSpeedControlOutNew / BST_fCarAngle_P;
+		if(fAbsCmd <= SPEED_STOP_CMD_DEADBAND)
+		{
+			if(fAngleRefTarget > SPEED_STOP_ANGLE_REF_MAX) fAngleRefTarget = SPEED_STOP_ANGLE_REF_MAX;
+			if(fAngleRefTarget < -SPEED_STOP_ANGLE_REF_MAX) fAngleRefTarget = -SPEED_STOP_ANGLE_REF_MAX;
+		}
+
+		if(fAngleRefTarget > CAR_ANGLE_REF_MAX) fAngleRefTarget = CAR_ANGLE_REF_MAX;
+		if(fAngleRefTarget < CAR_ANGLE_REF_MIN) fAngleRefTarget = CAR_ANGLE_REF_MIN;
+
+		fAngleRefDelta = fAngleRefTarget - g_fAngleRefFiltered;
+		if(fAngleRefDelta > ANGLE_REF_SLEW_STEP) fAngleRefDelta = ANGLE_REF_SLEW_STEP;
+		if(fAngleRefDelta < -ANGLE_REF_SLEW_STEP) fAngleRefDelta = -ANGLE_REF_SLEW_STEP;
+		g_fAngleRefFiltered += fAngleRefDelta;
+
+		if(fAbsCmd <= SPEED_STOP_CMD_DEADBAND && fAbsSpeed <= SPEED_STOP_ACTUAL_DEADBAND)
+		{
+			g_fAngleRefFiltered *= 0.85f;
+			if(g_fAngleRefFiltered > -0.05f && g_fAngleRefFiltered < 0.05f)
+			{
+				g_fAngleRefFiltered = 0.0f;
+			}
+		}
+
+		BST_fAngleRef = g_fAngleRefFiltered;
 	}
 	else
 	{
 		BST_fAngleRef = 0;
+		g_fAngleRefFiltered = 0.0f;
 	}
-
-	if(BST_fAngleRef > CAR_ANGLE_REF_MAX) BST_fAngleRef = CAR_ANGLE_REF_MAX;
-	if(BST_fAngleRef < CAR_ANGLE_REF_MIN) BST_fAngleRef = CAR_ANGLE_REF_MIN;
-
-#if WHEEL_BALANCE_ENABLE
-	if(stopflag == 0 && fabsf(BST_fBluetoothSpeed) >= WHEEL_BALANCE_ACTIVE_SPEED_CMD)
-	{
-		if(fPulseDiff == 0.0f)
-		{
-			g_fWheelBalanceI *= 0.98f;
-		}
-		else
-		{
-			g_fWheelBalanceI += fPulseDiff * WHEEL_BALANCE_KI;
-		}
-		if(g_fWheelBalanceI > WHEEL_BALANCE_I_LIMIT) g_fWheelBalanceI = WHEEL_BALANCE_I_LIMIT;
-		if(g_fWheelBalanceI < -WHEEL_BALANCE_I_LIMIT) g_fWheelBalanceI = -WHEEL_BALANCE_I_LIMIT;
-
-		g_fWheelBalanceOut = fPulseDiff * WHEEL_BALANCE_KP + g_fWheelBalanceI;
-		if(g_fWheelBalanceOut > WHEEL_BALANCE_OUT_LIMIT) g_fWheelBalanceOut = WHEEL_BALANCE_OUT_LIMIT;
-		if(g_fWheelBalanceOut < -WHEEL_BALANCE_OUT_LIMIT) g_fWheelBalanceOut = -WHEEL_BALANCE_OUT_LIMIT;
-	}
-	else
-	{
-		g_fWheelBalanceI *= 0.8f;
-		g_fWheelBalanceOut *= 0.8f;
-	}
-#endif
 
 }
 
@@ -1012,7 +1022,7 @@ static void FigureEightControl(void)
 	float fTurnCmd;
 	u8 u8RunState;
 
-	u8MainEventNow = BST_u8MainEventCount;
+  	u8MainEventNow = BST_u8MainEventCount;
 	u8DeltaEvent = (u8)(u8MainEventNow - BST_u8MainEventLast);
 	BST_u8MainEventLast = u8MainEventNow;
 
